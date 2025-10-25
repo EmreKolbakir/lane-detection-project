@@ -1,18 +1,17 @@
-data/bdd100k/*
-data/test_videos/*
+# Data sets - DO NOT ADD
+data/
 
-!data/bdd100k/.gitkeep
-!data/test_videos/.gitkeep
+# Output files
+results/
 
-results/*
-!results/.gitkeep
-
+# Trained model files (.pth, .h5, etc.)
 deep_learning_approach/model/*
-!deep_learning_approach/model/.gitkeep
 
+# Python and Notebook cache files
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
 
+# Virtual environment
 venv/
 .venv/
