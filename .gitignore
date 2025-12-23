@@ -1,17 +1,14 @@
-# Data sets - DO NOT ADD
-data/
-
-# Output files
-results/
-
-# Trained model files (.pth, .h5, etc.)
-deep_learning_approach/model/*
-
-# Python and Notebook cache files
 __pycache__/
 *.pyc
-.ipynb_checkpoints/
-
-# Virtual environment
-venv/
 .venv/
+venv/
+.env
+.DS_Store
+.ipynb_checkpoints/
+data/
+outputs/
+kaggle.json
+*.mp4
+*.avi
+*.mov
+*.mkv
