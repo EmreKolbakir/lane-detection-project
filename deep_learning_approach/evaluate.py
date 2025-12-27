@@ -60,7 +60,7 @@ else:
 print("DEVICE =", DEVICE)
 
 MODEL_PATH = "model/tusimple_unet_binary.pth"
-VIDEO_PATH = "data/videos/normalDay/nD_16.mp4"
+VIDEO_PATH = "data/videos/normalDay/nD_9.mp4"
 OUTPUT_PATH = "ego_lane_video.mp4"
 
 # ================= LOAD MODEL =================
