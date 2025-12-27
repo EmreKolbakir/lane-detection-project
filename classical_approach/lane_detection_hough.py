@@ -25,10 +25,13 @@ class LaneDetector:
         roi_top_ratio: float = 0.62,
         roi_top_width: float = 0.2,
         roi_bottom_width: float = 0.9,
-        min_slope: float = 0.5,
+        roi_bottom_ratio: float = 0.95,
+        min_slope: float = 0.7,
+        center_split_ratio: float = 0.5,
         smooth_factor: float = 0.9,
         line_thickness: int = 8,
         overlay_alpha: float = 0.4,
+        use_color_mask: bool = True,
     ) -> None:
         self.canny_low = canny_low
         self.canny_high = canny_high
@@ -41,10 +44,13 @@ class LaneDetector:
         self.roi_top_ratio = roi_top_ratio
         self.roi_top_width = roi_top_width
         self.roi_bottom_width = roi_bottom_width
+        self.roi_bottom_ratio = roi_bottom_ratio
         self.min_slope = min_slope
+        self.center_split_ratio = center_split_ratio
         self.smooth_factor = smooth_factor
         self.line_thickness = line_thickness
         self.overlay_alpha = overlay_alpha
+        self.use_color_mask = use_color_mask
 
         self.prev_left: tuple[int, int, int, int] | None = None
         self.prev_right: tuple[int, int, int, int] | None = None
@@ -53,6 +59,11 @@ class LaneDetector:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (self.blur_kernel, self.blur_kernel), 0)
         edges = cv2.Canny(blur, self.canny_low, self.canny_high)
+        if self.use_color_mask:
+            color_mask = self._color_mask(frame)
+            masked_gray = cv2.bitwise_and(gray, gray, mask=color_mask)
+            edges_color = cv2.Canny(masked_gray, self.canny_low, self.canny_high)
+            edges = cv2.bitwise_or(edges, edges_color)
         masked_edges = self._region_of_interest(edges)
 
         lines = cv2.HoughLinesP(
@@ -84,14 +95,28 @@ class LaneDetector:
         top_y = int(height * self.roi_top_ratio)
         top_left = (int(width * (half - top_half_width)), top_y)
         top_right = (int(width * (half + top_half_width)), top_y)
-        bottom_left = (int(width * (half - bottom_half_width)), height)
-        bottom_right = (int(width * (half + bottom_half_width)), height)
+        bottom_y = int(height * self.roi_bottom_ratio)
+        if bottom_y <= top_y:
+            bottom_y = height
+
+        bottom_left = (int(width * (half - bottom_half_width)), bottom_y)
+        bottom_right = (int(width * (half + bottom_half_width)), bottom_y)
 
         polygon = np.array([[bottom_left, top_left, top_right, bottom_right]], dtype=np.int32)
         mask = np.zeros_like(img)
         mask_color = 255 if len(mask.shape) == 2 else (255,) * mask.shape[2]
         cv2.fillPoly(mask, polygon, mask_color)
         return cv2.bitwise_and(img, mask)
+
+    def _color_mask(self, frame: np.ndarray) -> np.ndarray:
+        hls = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
+        white_lower = np.array([0, 200, 0], dtype=np.uint8)
+        white_upper = np.array([180, 255, 80], dtype=np.uint8)
+        yellow_lower = np.array([15, 30, 100], dtype=np.uint8)
+        yellow_upper = np.array([35, 204, 255], dtype=np.uint8)
+        white_mask = cv2.inRange(hls, white_lower, white_upper)
+        yellow_mask = cv2.inRange(hls, yellow_lower, yellow_upper)
+        return cv2.bitwise_or(white_mask, yellow_mask)
 
     def _average_lines(
         self,
@@ -113,10 +138,14 @@ class LaneDetector:
                 continue
             intercept = y1 - slope * x1
             length = float(np.hypot(y2 - y1, x2 - x1))
+            split_x = width * self.center_split_ratio
+            y_top = int(height * self.roi_top_ratio)
+            x_bottom = (height - intercept) / slope
+            x_top = (y_top - intercept) / slope
 
-            if slope < 0 and max(x1, x2) < width * 0.6:
+            if slope < 0 and x_bottom < split_x and x_top < split_x:
                 left.append((slope, intercept, length))
-            elif slope > 0 and min(x1, x2) > width * 0.4:
+            elif slope > 0 and x_bottom > split_x and x_top > split_x:
                 right.append((slope, intercept, length))
 
         left_line = self._make_line(left, height, width)
@@ -240,6 +269,29 @@ def parse_args() -> argparse.Namespace:
         default=50,
         help="Threshold for Hough line detection.",
     )
+    parser.add_argument(
+        "--roi-bottom-ratio",
+        type=float,
+        default=0.95,
+        help="Bottom ratio for ROI (lower values crop the hood).",
+    )
+    parser.add_argument(
+        "--min-slope",
+        type=float,
+        default=0.7,
+        help="Minimum absolute slope to keep a line segment.",
+    )
+    parser.add_argument(
+        "--center-split-ratio",
+        type=float,
+        default=0.5,
+        help="Horizontal split ratio for separating left/right lanes.",
+    )
+    parser.add_argument(
+        "--no-color-mask",
+        action="store_true",
+        help="Disable HLS-based color mask for white/yellow lanes.",
+    )
     return parser.parse_args()
 
 
@@ -251,6 +303,10 @@ def run_video(
     canny_low: int,
     canny_high: int,
     hough_threshold: int,
+    roi_bottom_ratio: float,
+    min_slope: float,
+    center_split_ratio: float,
+    use_color_mask: bool,
 ) -> None:
     cap = cv2.VideoCapture(str(input_path))
     if not cap.isOpened():
@@ -272,6 +328,10 @@ def run_video(
         canny_low=canny_low,
         canny_high=canny_high,
         hough_threshold=hough_threshold,
+        roi_bottom_ratio=roi_bottom_ratio,
+        min_slope=min_slope,
+        center_split_ratio=center_split_ratio,
+        use_color_mask=use_color_mask,
     )
 
     start = time.perf_counter()
@@ -329,6 +389,10 @@ def main() -> None:
         canny_low=args.canny_low,
         canny_high=args.canny_high,
         hough_threshold=args.hough_threshold,
+        roi_bottom_ratio=args.roi_bottom_ratio,
+        min_slope=args.min_slope,
+        center_split_ratio=args.center_split_ratio,
+        use_color_mask=not args.no_color_mask,
     )
 
 

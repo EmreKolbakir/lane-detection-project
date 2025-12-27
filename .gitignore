@@ -12,3 +12,4 @@ kaggle.json
 *.avi
 *.mov
 *.mkv
+model/*.pth
