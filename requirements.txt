@@ -1,3 +1,9 @@
 numpy>=1.24.0
 opencv-python>=4.8.0
 kaggle>=1.6.0
+torch>=1.12.0
+torchvision>=0.13.0
+scipy
+tqdm
+tensorboardX
+matplotlib
