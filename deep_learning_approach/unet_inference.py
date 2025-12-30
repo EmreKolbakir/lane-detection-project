@@ -99,8 +99,6 @@ def parse_args() -> argparse.Namespace:
                         help="Path to trained .pth model.")
     parser.add_argument("--output", default=None, help="Output path.")
     parser.add_argument("--threshold", type=float, default=0.5, help="Binary threshold.")
-    parser.add_argument("--thin", type=int, default=5, 
-                        help="Lane thinning amount (0=none, 1=slight, 2=moderate, 3=significant, 4+=very thin)")
     parser.add_argument("--show", action="store_true", help="Display result.")
     return parser.parse_args()
 
@@ -157,61 +155,16 @@ def postprocess_mask(output: torch.Tensor, original_size: tuple, threshold: floa
     return mask
 
 
-def overlay_mask(image: np.ndarray, mask: np.ndarray, color=(0, 255, 0), alpha=0.4) -> np.ndarray:
-    """Overlay binary mask on image."""
+def overlay_mask(image: np.ndarray, mask: np.ndarray, color=(0, 255, 0), alpha=0.5) -> np.ndarray:
+    """Simple overlay of mask on image - shows exactly what the model outputs."""
     overlay = image.copy()
+    
+    # Create colored overlay where mask is active
     mask_bool = mask > 127
+    
+    # Blend color with original image at mask locations
     overlay[mask_bool] = (
         overlay[mask_bool] * (1 - alpha) + np.array(color) * alpha
-    ).astype(np.uint8)
-    return overlay
-
-
-def fill_lane_area(image: np.ndarray, mask: np.ndarray, color=(0, 255, 0), alpha=0.3) -> np.ndarray:
-    """Fill the drivable lane area between detected lane lines."""
-    overlay = image.copy()
-    h, w = mask.shape[:2]
-    
-    # Find lane points for each row
-    left_points = []
-    right_points = []
-    
-    # Scan from bottom to top (more reliable at bottom)
-    for y in range(h - 1, int(h * 0.4), -5):  # Skip top 40% of image
-        row = mask[y, :]
-        lane_pixels = np.where(row > 127)[0]
-        
-        if len(lane_pixels) > 5:  # Need enough pixels
-            # Find clusters (left and right lane)
-            center = w // 2
-            left_px = lane_pixels[lane_pixels < center]
-            right_px = lane_pixels[lane_pixels > center]
-            
-            if len(left_px) > 0:
-                # İç kenar: sol şeridin EN SAĞ noktası (max)
-                left_x = int(np.max(left_px))
-                left_points.append((left_x, y))
-            
-            if len(right_px) > 0:
-                # İç kenar: sağ şeridin EN SOL noktası (min)
-                right_x = int(np.min(right_px))
-                right_points.append((right_x, y))
-    
-    # Create polygon if we have both lanes
-    if len(left_points) > 5 and len(right_points) > 5:
-        # Combine points: left bottom to top, then right top to bottom
-        polygon_pts = left_points + right_points[::-1]
-        polygon = np.array([polygon_pts], dtype=np.int32)
-        
-        # Draw filled polygon
-        lane_overlay = overlay.copy()
-        cv2.fillPoly(lane_overlay, polygon, color)
-        overlay = cv2.addWeighted(lane_overlay, alpha, overlay, 1 - alpha, 0)
-    
-    # Also draw the original mask on top (lane lines)
-    mask_bool = mask > 127
-    overlay[mask_bool] = (
-        overlay[mask_bool] * 0.5 + np.array(color) * 0.5
     ).astype(np.uint8)
     
     return overlay
@@ -231,34 +184,7 @@ def temporal_smooth_mask(current_mask: np.ndarray, prev_mask: np.ndarray, smooth
     return smoothed.astype(np.uint8)
 
 
-def thin_lane_mask(mask: np.ndarray, erosion_size: int = 3) -> np.ndarray:
-    """Thin the lane mask using morphological erosion.
-    
-    Args:
-        mask: Binary lane mask (0 or 255)
-        erosion_size: Size of erosion kernel (larger = thinner lanes)
-                      1 = slight thinning
-                      2 = moderate thinning  
-                      3 = significant thinning
-                      4+ = very thin
-    """
-    if erosion_size <= 0:
-        return mask
-    
-    # Create erosion kernel
-    kernel = cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE, 
-        (erosion_size * 2 + 1, erosion_size * 2 + 1)
-    )
-    
-    # Apply erosion (shrinks white regions)
-    thinned = cv2.erode(mask, kernel, iterations=1)
-    
-    return thinned
-
-
-def process_image(model: UNet, image_path: str, device: torch.device, threshold: float = 0.5,
-                  thin_amount: int = 3):
+def process_image(model: UNet, image_path: str, device: torch.device, threshold: float = 0.5):
     """Process a single image."""
     image = cv2.imread(image_path)
     if image is None:
@@ -276,17 +202,13 @@ def process_image(model: UNet, image_path: str, device: torch.device, threshold:
     # Postprocess
     mask = postprocess_mask(output, original_size, threshold)
     
-    # Thin the lane mask
-    mask = thin_lane_mask(mask, thin_amount)
-    
-    result = fill_lane_area(image, mask)
+    result = overlay_mask(image, mask)
     
     return result, mask, image
 
 
 def process_video(model: UNet, video_path: str, output_path: str, device: torch.device, 
-                  threshold: float = 0.5, show: bool = False, smooth_factor: float = 0.6,
-                  thin_amount: int = 2):
+                  threshold: float = 0.5, show: bool = False, smooth_factor: float = 0.6):
     """Process a video file with temporal smoothing."""
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -304,7 +226,7 @@ def process_video(model: UNet, video_path: str, output_path: str, device: torch.
     start_time = time.perf_counter()
     prev_mask = None  # For temporal smoothing
     
-    print(f"Processing {total_frames} frames (thin={thin_amount})...")
+    print(f"Processing {total_frames} frames...")
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -318,15 +240,12 @@ def process_video(model: UNet, video_path: str, output_path: str, device: torch.
         
         mask = postprocess_mask(output, original_size, threshold)
         
-        # Thin the lane mask
-        mask = thin_lane_mask(mask, thin_amount)
-        
         # Apply temporal smoothing
         mask = temporal_smooth_mask(mask, prev_mask, smooth_factor)
         prev_mask = mask.copy()
         
         # Fill lane area instead of just overlay
-        result = fill_lane_area(frame, mask)
+        result = overlay_mask(frame, mask)
         
         writer.write(result)
         frame_count += 1
@@ -379,8 +298,7 @@ def main():
     
     if suffix in [".jpg", ".jpeg", ".png", ".bmp"]:
         # Process single image
-        result, mask, original = process_image(model, str(input_path), device, args.threshold,
-                                               thin_amount=args.thin)
+        result, mask, original = process_image(model, str(input_path), device, args.threshold)
         
         # Output path
         if args.output is None:
@@ -390,7 +308,7 @@ def main():
         
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(output_path, result)
-        print(f"Saved result to: {output_path} (thin={args.thin})")
+        print(f"Saved result to: {output_path}")
         
         if args.show:
             cv2.imshow("Original", original)
@@ -407,8 +325,7 @@ def main():
             output_path = args.output
         
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        process_video(model, str(input_path), output_path, device, args.threshold, args.show,
-                      thin_amount=args.thin)
+        process_video(model, str(input_path), output_path, device, args.threshold, args.show)
     
     else:
         raise ValueError(f"Unsupported file format: {suffix}")

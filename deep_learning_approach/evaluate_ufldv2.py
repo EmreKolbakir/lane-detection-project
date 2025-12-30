@@ -17,7 +17,7 @@ import torch
 from tqdm import tqdm
 
 # Import from inference_video.py
-from inference_video import load_config, load_model, preprocess_frame, pred2coords
+from ufldv2_inference import load_config, load_model, preprocess_frame, pred2coords
 
 
 def lanes_to_mask(lanes: List[List[int]], h_samples: List[int], 
