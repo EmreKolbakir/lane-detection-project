@@ -1,5 +1,5 @@
 dataset= 'CULane'
-data_root= '../../data/CULane'
+data_root= '../data/CULane'
 epoch= 20
 batch_size= 16
 optimizer= 'SGD'

@@ -81,7 +81,9 @@ def preprocess_frame(frame: np.ndarray, cfg) -> torch.Tensor:
     img = img[resize_h - cfg.train_height :, :, :]
 
     img = img.astype(np.float32) / 255.0
-    img = (img - np.array([0.485, 0.456, 0.406])) / np.array([0.229, 0.224, 0.225])
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    img = (img - mean) / std
     img = img.transpose(2, 0, 1)
     return torch.from_numpy(img).unsqueeze(0)
 
@@ -159,18 +161,34 @@ def draw_lanes(frame: np.ndarray, lanes: list[list[tuple[int, int]]]) -> np.ndar
         if len(lane) < 2:
             continue
         lane_sorted = sorted(lane, key=lambda p: p[1])
-        xs = [p[0] for p in lane_sorted]
-        lane_groups.append((float(np.mean(xs)), lane_sorted))
+        bottom_x = lane_sorted[-1][0]
+        lane_groups.append((bottom_x, lane_sorted))
         for i in range(1, len(lane_sorted)):
             cv2.line(overlay, lane_sorted[i - 1], lane_sorted[i], (0, 255, 0), 5)
 
-    if len(lane_groups) >= 2:
-        lane_groups.sort(key=lambda item: item[0])
-        left_lane = lane_groups[0][1]
-        right_lane = lane_groups[-1][1]
-        if left_lane[0][0] < right_lane[0][0]:
-            polygon = np.array(left_lane + right_lane[::-1], dtype=np.int32)
-            cv2.fillPoly(overlay, [polygon], (0, 255, 0))
+    if len(lane_groups) <= 2:
+        return cv2.addWeighted(frame, 1.0, overlay, 0.35, 0)
+
+    center_x = frame.shape[1] * 0.5
+    left_lane = None
+    right_lane = None
+    for x_pos, lane_sorted in lane_groups:
+        if x_pos <= center_x and (left_lane is None or x_pos > left_lane[0]):
+            left_lane = (x_pos, lane_sorted)
+        if x_pos >= center_x and (right_lane is None or x_pos < right_lane[0]):
+            right_lane = (x_pos, lane_sorted)
+
+    selected = []
+    if left_lane and right_lane and left_lane[1] != right_lane[1]:
+        selected = [left_lane[1], right_lane[1]]
+    else:
+        lane_groups.sort(key=lambda item: abs(item[0] - center_x))
+        selected = [lane for _, lane in lane_groups[:2]]
+
+    overlay = frame.copy()
+    for lane_sorted in selected:
+        for i in range(1, len(lane_sorted)):
+            cv2.line(overlay, lane_sorted[i - 1], lane_sorted[i], (0, 255, 0), 5)
 
     return cv2.addWeighted(frame, 1.0, overlay, 0.35, 0)
 

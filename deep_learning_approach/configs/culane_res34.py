@@ -1,5 +1,5 @@
 dataset= 'CULane'
-data_root= '' # Need to be modified before running
+data_root= '../data/CULane'
 epoch= 50
 batch_size= 32
 optimizer= 'SGD'

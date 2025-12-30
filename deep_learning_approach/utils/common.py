@@ -1,5 +1,10 @@
 import os, argparse
-from data.dali_data import TrainCollect
+try:
+    from data.dali_data import TrainCollect  # type: ignore
+    _DALI_IMPORT_ERROR = None
+except Exception as exc:
+    from data.torch_data import TrainCollect  # type: ignore
+    _DALI_IMPORT_ERROR = exc
 from utils.dist_utils import get_rank, get_world_size, is_main_process, dist_print, DistSummaryWriter
 from utils.config import Config
 import torch
@@ -66,6 +71,7 @@ def get_args():
     parser.add_argument('--selected_lane', default = None, type = int, nargs='+')
     parser.add_argument('--cumsum', default = None, type = str2bool)
     parser.add_argument('--masked', default = None, type = str2bool)
+    parser.add_argument('--amp', action='store_true', default=None, help='enable mixed precision (AMP)')
     
     
     return parser
@@ -77,7 +83,7 @@ def merge_config():
 
     items = ['dataset','data_root','epoch','batch_size','optimizer','learning_rate',
     'weight_decay','momentum','scheduler','steps','gamma','warmup','warmup_iters',
-    'use_aux','griding_num','backbone','sim_loss_w','shp_loss_w','note','log_path',
+    'use_aux','griding_num','backbone','sim_loss_w','shp_loss_w','note','log_path','auto_backup','amp',
     'finetune','resume', 'test_model','test_work_dir', 'num_lanes', 'var_loss_power', 'num_row', 'num_col', 'train_width', 'train_height',
     'num_cell_row', 'num_cell_col', 'mean_loss_w','fc_norm','soft_loss','cls_loss_col_w', 'cls_ext_col_w', 'mean_loss_col_w', 'eval_mode', 'eval_during_training', 'split_channel', 'match_method', 'selected_lane', 'cumsum', 'masked']
     for item in items:
@@ -180,6 +186,8 @@ def get_model(cfg):
     return importlib.import_module('model.model_'+cfg.dataset.lower()).get_model(cfg)
 
 def get_train_loader(cfg):
+    if _DALI_IMPORT_ERROR is not None and get_rank() == 0:
+        print(f'DALI not available, using torch DataLoader fallback: {_DALI_IMPORT_ERROR}')
     if cfg.dataset == 'CULane':
         train_loader = TrainCollect(cfg.batch_size, 4, cfg.data_root, os.path.join(cfg.data_root, 'list/train_gt.txt'), get_rank(), get_world_size(), 
                                 cfg.row_anchor, cfg.col_anchor, cfg.train_width, cfg.train_height, cfg.num_cell_row, cfg.num_cell_col, cfg.dataset, cfg.crop_ratio)

@@ -1,4 +1,5 @@
 import torch, os, datetime
+from torch.cuda.amp import GradScaler, autocast
 
 
 from utils.dist_utils import dist_print, dist_tqdm, synchronize
@@ -11,18 +12,38 @@ from utils.common import get_work_dir, get_logger
 import time
 from evaluation.eval_wrapper import eval_lane
 
-def train(net, data_loader, loss_dict, optimizer, scheduler,logger, epoch, metric_dict, dataset):
+def can_run_eval(cfg):
+    eval_flag = getattr(cfg, 'eval_during_training', None)
+    if eval_flag is False:
+        return False, 'eval_during_training disabled'
+    if cfg.dataset != 'CULane':
+        return True, ''
+    base_dir = os.path.dirname(__file__)
+    eval_bin = os.path.join(base_dir, 'evaluation', 'culane', 'evaluate')
+    if os.name == 'nt':
+        if os.path.exists(eval_bin + '.exe'):
+            return True, ''
+    if os.path.exists(eval_bin):
+        return True, ''
+    return False, f'missing evaluation binary: {eval_bin}'
+
+def train(net, data_loader, loss_dict, optimizer, scheduler, logger, epoch, metric_dict, dataset, scaler, use_amp):
     net.train()
     progress_bar = dist_tqdm(train_loader)
     for b_idx, data_label in enumerate(progress_bar):
         global_step = epoch * len(data_loader) + b_idx
 
-        results = inference(net, data_label, dataset)
-
-        loss = calc_loss(loss_dict, results, logger, global_step, epoch)
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        with autocast(enabled=use_amp):
+            results = inference(net, data_label, dataset)
+            loss = calc_loss(loss_dict, results, logger, global_step, epoch)
+        if use_amp:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
         scheduler.step(global_step)
 
 
@@ -73,11 +94,16 @@ if __name__ == "__main__":
     cfg.distributed = distributed
 
     if args.local_rank == 0:
-        os.system('rm .work_dir_tmp_file.txt')
+        tmp_file = '.work_dir_tmp_file.txt'
+        if os.path.exists(tmp_file):
+            os.remove(tmp_file)
     
     dist_print(datetime.datetime.now().strftime('[%Y/%m/%d %H:%M:%S]') + ' start training...')
     dist_print(cfg)
     assert cfg.backbone in ['18','34','50','101','152','50next','101next','50wide','101wide', '34fca']
+
+    use_amp = bool(getattr(cfg, 'amp', False)) and torch.cuda.is_available()
+    scaler = GradScaler(enabled=use_amp)
 
     train_loader = get_train_loader(cfg)
     net = get_model(cfg)
@@ -112,16 +138,29 @@ if __name__ == "__main__":
     # cp_projects(cfg.auto_backup, work_dir)
     max_res = 0
     res = None
+    run_eval, eval_reason = can_run_eval(cfg)
+    if not run_eval:
+        dist_print(f'Skipping evaluation during training: {eval_reason}')
     for epoch in range(resume_epoch, cfg.epoch):
 
-        train(net, train_loader, loss_dict, optimizer, scheduler,logger, epoch, metric_dict, cfg.dataset)
+        train(net, train_loader, loss_dict, optimizer, scheduler, logger, epoch, metric_dict, cfg.dataset, scaler, use_amp)
         train_loader.reset()
 
-        res = eval_lane(net, cfg, ep = epoch, logger = logger)
+        if run_eval:
+            try:
+                res = eval_lane(net, cfg, ep = epoch, logger = logger)
+            except Exception as exc:
+                dist_print(f'Evaluation failed: {exc}. Skipping evaluation for remaining epochs.')
+                run_eval = False
+                res = None
 
         if res is not None and res > max_res:
             max_res = res
             save_model(net, optimizer, epoch, work_dir, distributed)
-        logger.add_scalar('CuEval/X',max_res,global_step = epoch)
+        elif not run_eval:
+            save_model(net, optimizer, epoch, work_dir, distributed)
+
+        if run_eval:
+            logger.add_scalar('CuEval/X', max_res, global_step=epoch)
 
     logger.close()
