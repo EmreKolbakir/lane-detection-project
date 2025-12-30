@@ -13,3 +13,11 @@ kaggle.json
 *.mov
 *.mkv
 model/*.pth
+
+# Weights
+deep_learning_approach/weights/
+*.pth
+
+# Data
+data/
+outputs/

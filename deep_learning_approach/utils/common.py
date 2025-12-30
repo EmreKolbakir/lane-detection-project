@@ -1,14 +1,47 @@
 import os, argparse
-try:
-    from data.dali_data import TrainCollect  # type: ignore
-    _DALI_IMPORT_ERROR = None
-except Exception as exc:
-    from data.torch_data import TrainCollect  # type: ignore
-    _DALI_IMPORT_ERROR = exc
-from utils.dist_utils import get_rank, get_world_size, is_main_process, dist_print, DistSummaryWriter
 from utils.config import Config
 import torch
 import time
+
+# Stub functions for dist_utils (not needed for inference)
+def get_rank():
+    return 0
+
+def get_world_size():
+    return 1
+
+def is_main_process():
+    return True
+
+def dist_print(*args, **kwargs):
+    print(*args, **kwargs)
+
+class DistSummaryWriter:
+    def __init__(self, *args, **kwargs):
+        pass
+    def add_scalar(self, *args, **kwargs):
+        pass
+    def add_histogram(self, *args, **kwargs):
+        pass
+
+# Lazy import for data module (not needed for inference)
+_DALI_IMPORT_ERROR = None
+TrainCollect = None
+
+def _load_train_collect():
+    global TrainCollect, _DALI_IMPORT_ERROR
+    if TrainCollect is not None:
+        return
+    try:
+        from data.dali_data import TrainCollect as TC
+        TrainCollect = TC
+    except Exception as exc:
+        _DALI_IMPORT_ERROR = exc
+        try:
+            from data.torch_data import TrainCollect as TC
+            TrainCollect = TC
+        except Exception:
+            pass
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -186,6 +219,9 @@ def get_model(cfg):
     return importlib.import_module('model.model_'+cfg.dataset.lower()).get_model(cfg)
 
 def get_train_loader(cfg):
+    _load_train_collect()
+    if TrainCollect is None:
+        raise ImportError("Could not import data module. Make sure data/dali_data.py or data/torch_data.py exists.")
     if _DALI_IMPORT_ERROR is not None and get_rank() == 0:
         print(f'DALI not available, using torch DataLoader fallback: {_DALI_IMPORT_ERROR}')
     if cfg.dataset == 'CULane':
