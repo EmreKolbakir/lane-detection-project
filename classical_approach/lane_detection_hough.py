@@ -201,12 +201,7 @@ class LaneDetector:
     ) -> np.ndarray:
         line_img = np.zeros_like(frame)
 
-        if left_line is not None and right_line is not None:
-            x1, y1, x2, y2 = left_line
-            x3, y3, x4, y4 = right_line
-            polygon = np.array([[(x1, y1), (x2, y2), (x4, y4), (x3, y3)]], dtype=np.int32)
-            cv2.fillPoly(line_img, polygon, (0, 255, 0))
-
+        # Draw only the detected lines (no polygon fill)
         if left_line is not None:
             cv2.line(
                 line_img,
